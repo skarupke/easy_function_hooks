@@ -120,7 +120,7 @@ struct MemberFcfFunctionAssigner
 	}
 };
 template<typename T, T lhs>
-struct VirtualFofFunctionAssigner
+struct VirtualFcfFunctionAssigner
 	: public VirtualBaseAssigner<T, lhs>
 {
 	static void assign(class_type & object, const Function<T> & rhs)
@@ -235,7 +235,7 @@ struct VirtualAssigner
 		typename std::conditional
 		<
 			std::is_same<Function<T>, AssignTo>::value,
-			VirtualFofFunctionAssigner<T, lhs>,
+			VirtualFcfFunctionAssigner<T, lhs>,
 			typename std::conditional
 			<
 				meta::is_method_compatible<T, AssignTo>::value,
