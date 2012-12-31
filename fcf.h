@@ -3,6 +3,8 @@
 #include "fcf/lambda.h"
 #include "fcf/function.h"
 #include "fcf/vtable.h"
+#include <cstdlib>
+#include <cstdint>
 
 namespace fcf
 {
@@ -34,7 +36,21 @@ if (true)\
 else static_cast<void>(0)
 
 
-void place_jmp(void * from, const void * to);
+inline void place_jmp(void * from, const void * to)
+{
+#ifdef _DEBUG
+	// must be within two gigabytes of each other
+	ptrdiff_t distance = static_cast<const char *>(from) - static_cast<const char *>(to);
+	FCF_ASSERT(static_cast<int32_t>(distance) == distance);
+#endif
+	unsigned char * target_bytes = static_cast<unsigned char *>(from);
+	static const unsigned char JMP_INSTRUCTION = 0xE9;
+	uint32_t jump_dist = reinterpret_cast<uint32_t>(to) - reinterpret_cast<uint32_t>(from) - JMP_BYTE_COUNT;
+	makeUnsafe(from, JMP_BYTE_COUNT);
+	target_bytes[0] = JMP_INSTRUCTION;
+	memcpy(target_bytes + 1, &jump_dist, sizeof(jump_dist));
+	notifyCodeChange(from, JMP_BYTE_COUNT);
+}
 
 template<typename T, T lhs>
 struct VirtualBaseAssigner
@@ -122,32 +138,36 @@ struct VirtualFofFunctionAssigner
 template<typename T, T lhs, typename F>
 struct FunctorAssigner
 {
-	static void assign(const F & rhs)
+	static void assign(F rhs)
 	{
 		typedef typename meta::func_type<T>::type func_type;
-		unique_storer<func_type, T, lhs>::func = rhs;
-		FCF_ASSIGN(lhs, &call_stored_function<meta::calling_convention<T>::value, func_type, &unique_storer<func_type, T, lhs>::func>::call);
+		unique_storer<func_type, T, lhs>::func = std::move(rhs);
+		auto caller = &call_stored_function<func_type>::caller<func_type>::call<&unique_storer<func_type, T, lhs>::func>;
+		FCF_ASSIGN(lhs, caller);
 	}
 };
+
 template<typename T, T lhs, typename F>
 struct MemberFunctorAssigner
 {
-	static void assign(const F & rhs)
+	static void assign(F rhs)
 	{
 		typedef typename meta::func_type<T>::type func_type;
-		unique_storer<func_type, T, lhs>::func = rhs;
-		FCF_ASSIGN(lhs, &member_call_stored_function<meta::calling_convention<T>::value, func_type, &unique_storer<func_type, T, lhs>::func>::call);
+		unique_storer<func_type, T, lhs>::func = std::move(rhs);
+		auto caller = &member_call_stored_function<func_type>::caller<func_type>::call<&unique_storer<func_type, T, lhs>::func>;
+		FCF_ASSIGN(lhs, caller);
 	}
 };
 template<typename T, T lhs, typename F>
 struct VirtualFunctorAssigner
 	: public VirtualBaseAssigner<T, lhs>
 {
-	static void assign(class_type & object, const F & rhs)
+	static void assign(class_type & object, F rhs)
 	{
 		typedef typename meta::func_type<T>::type func_type;
-		unique_storer<func_type, T, lhs>::func = rhs;
-		FCF_VIRTUAL_ASSIGN(object, lhs, &member_call_stored_function<meta::calling_convention<T>::value, func_type, &unique_storer<func_type, T, lhs>::func>::call);
+		unique_storer<func_type, T, lhs>::func = std::move(rhs);
+		auto caller = &member_call_stored_function<func_type>::caller<func_type>::call<&unique_storer<func_type, T, lhs>::func>;
+		FCF_VIRTUAL_ASSIGN(object, lhs, caller);
 	}
 };
 

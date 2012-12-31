@@ -202,16 +202,6 @@ void test5()
 	FCF_ASSERT(foo.plusOne() == 6);
 }
 
-#include "fcf/symbol_lookup.h"
-
-struct FakeFoo
-{
-	FakeFoo::FakeFoo(int i)
-	{
-		std::cout << "FakeFoo " << i << std::endl;
-	}
-};
-
 void main()
 {
 	test1();
@@ -220,17 +210,7 @@ void main()
 	test4();
 	test5();
 
-//	void * blub = FCF_LOOKUP_SYMBOL(Foo::Foo);
-//	void * toreturn = nullptr;
-//	{
-//		_asm mov eax, Foo::Foo
-//		_asm mov toreturn, eax
-//	}
-	//std::cout << reinterpret_cast<size_t>(toreturn) << std::endl;
-	//fcf::place_jmp(FCF_LOOKUP_SYMBOL(Foo::Foo) FCF_LOOKUP_SYMBOL(FakeFoo::FakeFoo));
-
-
-	std::cout << "\nPress any key to quit." << std::endl;
+	std::cout << "\nPress Return to quit." << std::endl;
 	std::cin.get();
 }
 

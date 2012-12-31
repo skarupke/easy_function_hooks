@@ -6,26 +6,31 @@
 
 namespace fcf
 {
+template<typename T>
 struct FunctionBase
 {
-	FunctionBase(void * func)
+	FunctionBase(T func)
+		: func(func)
 	{
 		memcpy(start_bytes, func, sizeof(start_bytes));
 		makeUnsafe(func, sizeof(start_bytes));
 	}
 	FunctionBase(const FunctionBase & other)
+		: func(other.func)
 	{
 		memcpy(start_bytes, other.start_bytes, sizeof(start_bytes));
 	}
 
 	FunctionBase & operator=(void * other)
 	{
+		func = other;
 		memcpy(start_bytes, other, sizeof(start_bytes));
 		makeUnsafe(other, sizeof(start_bytes));
 		return *this;
 	}
 	FunctionBase & operator=(const FunctionBase & other)
 	{
+		func = other.func;
 		memcpy(start_bytes, other.start_bytes, sizeof(start_bytes));
 		return *this;
 	}
@@ -36,7 +41,8 @@ private:
 	unsigned char start_bytes[JMP_BYTE_COUNT];
 
 protected:
-	inline void prepare(void * func) const
+	T func;
+	inline void prepare() const
 	{
 		memcpy(func, start_bytes, sizeof(start_bytes));
 		notifyCodeChange(func, sizeof(start_bytes));
@@ -44,8 +50,8 @@ protected:
 
 	struct Copier
 	{
-		Copier(void * func)
-			: func(func)
+		Copier(const FunctionBase & parent)
+			: func(parent.func)
 		{
 			memcpy(copied_bytes, func, sizeof(copied_bytes));
 		}
@@ -64,229 +70,186 @@ protected:
 	};
 };
 
-#define FCF_BEFORE_CALL Copier copier(func); prepare(func)
-
-#define FCF_FUNCTION_BOILERPLATE\
-	T func;\
-public:\
-	Function(T func)\
-		: FunctionBase(func), func(func)\
-	{\
-	}\
-	Function(const Function & other)\
-		: FunctionBase(other), func(other.func)\
-	{\
-	}\
-	Function & operator=(T other)\
-	{\
-		FunctionBase::operator=(other);\
-		func = other;\
-		return *this;\
-	}\
-	Function & operator=(const Function & other)\
-	{\
-		FunctionBase::operator=(other);\
-		func = other.func;\
-		return *this;\
-	}\
-	inline T get() const { return func; }
-
-#define FCF_MEMBER_BEFORE_CALL Copier copier(ptr); prepare(ptr);
-
-#define FCF_MEMBER_FUNCTION_BOILERPLATE\
-	T func;\
-	void * ptr;\
-	typedef typename meta::class_type<T>::type class_type;\
-public:\
-	Function(T func)\
-		: FunctionBase(getMemberFunctionAddress(func)), func(func), ptr(getMemberFunctionAddress(func))\
-	{\
-	}\
-	Function(const Function & other)\
-		: FunctionBase(other), func(other.func), ptr(other.ptr)\
-	{\
-	}\
-	Function & operator=(T other)\
-	{\
-		ptr = getMemberFunctionAddress(other);\
-		FunctionBase::operator=(ptr);\
-		func = other;\
-		return *this;\
-	}\
-	Function & operator=(const Function & other)\
-	{\
-		FunctionBase::operator=(other);\
-		func = other.func;\
-		ptr = other.ptr;\
-		return *this;\
-	}\
-	inline T get() const { return func; }
-
-#define FCF_VIRTUAL_FUNCTION_BOILERPLATE\
-	typedef typename meta::class_type<T>::type class_type;\
-	T func;\
-	void * ptr;\
-	typedef typename meta::class_type<T>::type class_type;\
-public:\
-	VirtualFunction(class_type & object, T func)\
-		: FunctionBase(getVirtualFunctionAddress(&object, getVTableIndex<T>(func))), func(func), ptr(getVirtualFunctionAddress(&object, getVTableIndex<T>(func)))\
-	{\
-	}\
-	VirtualFunction(const VirtualFunction & other)\
-		: FunctionBase(other), func(other.func), ptr(other.ptr)\
-	{\
-	}\
-	VirtualFunction & operator=(const VirtualFunction & other)\
-	{\
-		FunctionBase::operator=(other);\
-		func = other.func;\
-		ptr = other.ptr;\
-		return *this;\
-	}\
-	inline T get() const { return func; }
-
-template<typename T, typename Enable = void>
+template<typename>
 class Function;
-template<typename T, typename Enable = void>
+template<typename>
 class VirtualFunction;
 
-template<typename T>
-class Function<T, typename std::enable_if<!FCF_IS_METHOD && FCF_NUM_ARGS == 0>::type>
-	: public FunctionBase
+template<typename Result, typename... Args>
+class Function<Result (*)(Args...)>
+	: public FunctionBase<Result (*)(Args...)>
 {
-	FCF_FUNCTION_BOILERPLATE
-
-	FCF_RETURN_TYPE operator()() const
+public:
+	Function(Result (*func)(Args...))
+		: FunctionBase(func)
 	{
-		FCF_BEFORE_CALL;
-		return func();
+	}
+	Function(const Function & other)
+		: FunctionBase(other)
+	{
+	}
+	Function & operator=(Result (*other)(Args...))
+	{
+		FunctionBase::operator=(other);
+		return *this;
+	}
+	Function & operator=(const Function & other)
+	{
+		FunctionBase::operator=(other);
+		return *this;
+	}
+	inline Result (*get() const)(Args...)
+	{
+		return func;
+	}
+
+	Result operator()(Args... args) const
+	{
+		Copier copier(*this);
+		prepare();
+		return func(std::forward<Args>(args)...);
 	}
 };
-#define FCF_IS_CONST_METHOD std::is_const<typename std::remove_reference<typename meta::class_type<T>::type>::type>::value
-template<typename T>
-class Function<T, typename std::enable_if<FCF_IS_METHOD && !FCF_IS_CONST_METHOD && FCF_NUM_ARGS == 0>::type>
-	: public FunctionBase
+template<typename Result, typename Class, typename... Args>
+class Function<Result (Class::*)(Args...)>
+	: public FunctionBase<void *>
 {
-	FCF_MEMBER_FUNCTION_BOILERPLATE
-
-	FCF_RETURN_TYPE operator()(class_type & object) const
+	Result (Class::*func)(Args...);
+public:
+	Function(Result (Class::*func)(Args...))
+		: FunctionBase(getMemberFunctionAddress(func)), func(func)
 	{
-		FCF_MEMBER_BEFORE_CALL;
-		return (object.*func)();
+	}
+	Function(const Function & other)
+		: FunctionBase(other), func(other.func)
+	{
+	}
+	Function & operator=(Result (Class::*other)(Args...))
+	{
+		FunctionBase::operator=(getMemberFunctionAddress(other));
+		func = other;
+		return *this;
+	}
+	Function & operator=(const Function & other)
+	{
+		FunctionBase::operator=(other);
+		func = other.func;
+		return *this;
+	}
+	inline Result (Class::*get() const)(Args...)
+	{
+		return func;
+	}
+
+	Result operator()(Class & object, Args... args) const
+	{
+		Copier copier(*this);
+		prepare();
+		return (object.*func)(std::forward<Args>(args)...);
 	}
 };
-template<typename T>
-class Function<T, typename std::enable_if<FCF_IS_METHOD && FCF_IS_CONST_METHOD && FCF_NUM_ARGS == 0>::type>
-	: public FunctionBase
+template<typename Result, typename Class, typename... Args>
+class Function<Result (Class::*)(Args...) const>
+	: public FunctionBase<void *>
 {
-	FCF_MEMBER_FUNCTION_BOILERPLATE
-
-	FCF_RETURN_TYPE operator()(const class_type & object) const
+	Result (Class::*func)(Args...) const;
+public:
+	Function(Result (Class::*func)(Args...) const)
+		: FunctionBase(getMemberFunctionAddress(func)), func(func)
 	{
-		FCF_MEMBER_BEFORE_CALL;
-		return (object.*func)();
+	}
+	Function(const Function & other)
+		: FunctionBase(other), func(other.func)
+	{
+	}
+	Function & operator=(Result (Class::*other)(Args...) const)
+	{
+		FunctionBase::operator=(getMemberFunctionAddress(other));
+		func = other;
+		return *this;
+	}
+	Function & operator=(const Function & other)
+	{
+		FunctionBase::operator=(other);
+		func = other.func;
+		return *this;
+	}
+	inline Result (Class::*get() const)(Args...) const
+	{
+		return func;
+	}
+
+	Result operator()(const Class & object, Args... args) const
+	{
+		Copier copier(*this);
+		prepare();
+		return (object.*func)(std::forward<Args>(args)...);
 	}
 };
-template<typename T>
-class VirtualFunction<T, typename std::enable_if<FCF_IS_METHOD && !FCF_IS_CONST_METHOD && FCF_NUM_ARGS == 0>::type>
-	: public FunctionBase
+template<typename Result, typename Class, typename... Args>
+class VirtualFunction<Result (Class::*)(Args...)>
+	: public FunctionBase<void *>
 {
-	FCF_VIRTUAL_FUNCTION_BOILERPLATE
-
-	FCF_RETURN_TYPE operator()(class_type & object) const
+	Result (Class::*func)(Args...);
+public:
+	VirtualFunction(Class & object, Result (Class::*func)(Args...))
+		: FunctionBase(getVirtualFunctionAddress(&object, getVTableIndex<Result (Class::*)(Args...)>(func))), func(func)
 	{
-		FCF_MEMBER_BEFORE_CALL;
-		return (object.*func)();
+	}
+	VirtualFunction(const VirtualFunction & other)
+		: FunctionBase(other), func(other.func)
+	{
+	}
+	VirtualFunction & operator=(const VirtualFunction & other)
+	{
+		FunctionBase::operator=(other);
+		func = other.func;
+		return *this;
+	}
+	inline Result (Class::*get() const)(Args...)
+	{
+		return func;
+	}
+
+	Result operator()(Class & object, Args... args) const
+	{
+		Copier copier(*this);
+		prepare();
+		return (object.*func)(std::forward<Args>(args)...);
 	}
 };
-template<typename T>
-class VirtualFunction<T, typename std::enable_if<FCF_IS_METHOD && FCF_IS_CONST_METHOD && FCF_NUM_ARGS == 0>::type>
-	: public FunctionBase
+template<typename Result, typename Class, typename... Args>
+class VirtualFunction<Result (Class::*)(Args...) const>
+	: public FunctionBase<void *>
 {
-	FCF_VIRTUAL_FUNCTION_BOILERPLATE
-
-	FCF_RETURN_TYPE operator()(const class_type & object) const
+	Result (Class::*func)(Args...) const;
+public:
+	VirtualFunction(Class & object, Result (Class::*func)(Args...) const)
+		: FunctionBase(getVirtualFunctionAddress(&object, getVTableIndex<Result (Class::*)(Args...) const>(func))), func(func)
 	{
-		FCF_MEMBER_BEFORE_CALL;
-		return (object.*func)();
+	}
+	VirtualFunction(const VirtualFunction & other)
+		: FunctionBase(other), func(other.func)
+	{
+	}
+	VirtualFunction & operator=(const VirtualFunction & other)
+	{
+		FunctionBase::operator=(other);
+		func = other.func;
+		return *this;
+	}
+	inline Result (Class::*get() const)(Args...) const
+	{
+		return func;
+	}
+
+	Result operator()(const Class & object, Args... args) const
+	{
+		Copier copier(*this);
+		prepare();
+		return (object.*func)(std::forward<Args>(args)...);
 	}
 };
-
-#define FCF_DEFINE_FUNCTION_CLASSES(numArgs)\
-template<typename T>\
-class Function<T, typename std::enable_if<!FCF_IS_METHOD && FCF_NUM_ARGS == numArgs>::type>\
-	: public FunctionBase\
-{\
-	FCF_FUNCTION_BOILERPLATE\
-	\
-	template<FCF_TYPENAMELIST ## numArgs>\
-	FCF_RETURN_TYPE operator()(FCF_RREFARGLIST ## numArgs) const\
-	{\
-		FCF_BEFORE_CALL;\
-		return func(FCF_FORWARDLIST ## numArgs);\
-	}\
-};\
-template<typename T>\
-class Function<T, typename std::enable_if<FCF_IS_METHOD && !FCF_IS_CONST_METHOD && FCF_NUM_ARGS == numArgs>::type>\
-	: public FunctionBase\
-{\
-	FCF_MEMBER_FUNCTION_BOILERPLATE\
-	\
-	template<FCF_TYPENAMELIST ## numArgs>\
-	FCF_RETURN_TYPE operator()(class_type & object, FCF_RREFARGLIST ## numArgs) const\
-	{\
-		FCF_MEMBER_BEFORE_CALL;\
-		return (object.*func)(FCF_FORWARDLIST ## numArgs);\
-	}\
-};\
-template<typename T>\
-class Function<T, typename std::enable_if<FCF_IS_METHOD && FCF_IS_CONST_METHOD && FCF_NUM_ARGS == numArgs>::type>\
-	: public FunctionBase\
-{\
-	FCF_MEMBER_FUNCTION_BOILERPLATE\
-	\
-	template<FCF_TYPENAMELIST ## numArgs>\
-	FCF_RETURN_TYPE operator()(const class_type & object, FCF_RREFARGLIST ## numArgs) const\
-	{\
-		FCF_MEMBER_BEFORE_CALL;\
-		return (object.*func)(FCF_FORWARDLIST ## numArgs);\
-	}\
-};\
-template<typename T>\
-class VirtualFunction<T, typename std::enable_if<FCF_IS_METHOD && !FCF_IS_CONST_METHOD && FCF_NUM_ARGS == numArgs>::type>\
-	: public FunctionBase\
-{\
-	FCF_VIRTUAL_FUNCTION_BOILERPLATE\
-	\
-	template<FCF_TYPENAMELIST ## numArgs>\
-	FCF_RETURN_TYPE operator()(class_type & object, FCF_RREFARGLIST ## numArgs) const\
-	{\
-		FCF_MEMBER_BEFORE_CALL;\
-		return (object.*func)(FCF_FORWARDLIST ## numArgs);\
-	}\
-};\
-template<typename T>\
-class VirtualFunction<T, typename std::enable_if<FCF_IS_METHOD && FCF_IS_CONST_METHOD && FCF_NUM_ARGS == numArgs>::type>\
-	: public FunctionBase\
-{\
-	FCF_VIRTUAL_FUNCTION_BOILERPLATE\
-	\
-	template<FCF_TYPENAMELIST ## numArgs>\
-	FCF_RETURN_TYPE operator()(const class_type & object, FCF_RREFARGLIST ## numArgs) const\
-	{\
-		FCF_MEMBER_BEFORE_CALL;\
-		return (object.*func)(FCF_FORWARDLIST ## numArgs);\
-	}\
-};
-
-FCF_DEFINE_FUNCTION_CLASSES(1)
-FCF_DEFINE_FUNCTION_CLASSES(2)
-FCF_DEFINE_FUNCTION_CLASSES(3)
-FCF_DEFINE_FUNCTION_CLASSES(4)
-FCF_DEFINE_FUNCTION_CLASSES(5)
-FCF_DEFINE_FUNCTION_CLASSES(6)
-FCF_DEFINE_FUNCTION_CLASSES(7)
-FCF_DEFINE_FUNCTION_CLASSES(8)
 
 }
 

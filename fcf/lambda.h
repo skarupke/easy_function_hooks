@@ -14,38 +14,62 @@ struct unique_storer
 template<typename T, typename P, P ptr>
 T unique_storer<T, P, ptr>::func;
 
-template<int calling_convention, typename T, T * func, typename Enable = void>
+template<typename>
 struct call_stored_function;
-template<int calling_convention, typename T, T * func, typename Enable = void>
+template<typename>
 struct member_call_stored_function;
 
-#ifdef _M_X64
-#define FCF_CURRENT_CALL_CONVENTION
-#define FCF_CURRENT_CALL_CONVENTION_ENUM meta::X64Call
-#include "lambda_by_convention.h"
-#undef FCF_CURRENT_CALL_CONVENTION_ENUM
-#undef FCF_CURRENT_CALL_CONVENTION
-#else
-#define FCF_CURRENT_CALL_CONVENTION __cdecl
-#define FCF_CURRENT_CALL_CONVENTION_ENUM meta::CDecl
-#include "lambda_by_convention.h"
-#undef FCF_CURRENT_CALL_CONVENTION_ENUM
-#undef FCF_CURRENT_CALL_CONVENTION
-#define FCF_CURRENT_CALL_CONVENTION __stdcall
-#define FCF_CURRENT_CALL_CONVENTION_ENUM meta::StdCall
-#include "lambda_by_convention.h"
-#undef FCF_CURRENT_CALL_CONVENTION_ENUM
-#undef FCF_CURRENT_CALL_CONVENTION
-#define FCF_CURRENT_CALL_CONVENTION __fastcall
-#define FCF_CURRENT_CALL_CONVENTION_ENUM meta::FastCall
-#include "lambda_by_convention.h"
-#undef FCF_CURRENT_CALL_CONVENTION_ENUM
-#undef FCF_CURRENT_CALL_CONVENTION
-#define FCF_CURRENT_CALL_CONVENTION __thiscall
-#define FCF_CURRENT_CALL_CONVENTION_ENUM meta::ThisCall
-#include "lambda_by_convention.h"
-#undef FCF_CURRENT_CALL_CONVENTION_ENUM
-#undef FCF_CURRENT_CALL_CONVENTION
-#endif
+template<typename Result, typename... Args>
+struct call_stored_function<std::function<Result (Args...)>>
+{
+	// this double nesting is necessary because of bugs in visual studio's
+	// variadic templates. (dec 2012)
+	// removing it should be trivial because we always know that
+	// CallType == std::function<Result (Args...)>
+	template<typename CallType>
+	struct caller
+	{
+		template<CallType * func>
+		static Result call(Args... args)
+		{
+			return (*func)(std::forward<Args>(args)...);
+		}
+	};
+};
+
+template<typename Result, typename Class, typename... Args>
+struct member_call_stored_function<std::function<Result (Class &, Args...)>>
+{
+	// this double nesting is necessary because of bugs in visual studio's
+	// variadic templates. (dec 2012)
+	// removing it should be trivial because we always know that
+	// CallType == std::function<Result (Class &, Args...)>
+	template<typename CallType>
+	struct caller
+	{
+		template<CallType * func>
+		Result call(Args... args)
+		{
+			return (*func)(reinterpret_cast<Class &>(*this), std::forward<Args>(args)...);
+		}
+	};
+};
+template<typename Result, typename Class, typename... Args>
+struct member_call_stored_function<std::function<Result (const Class &, Args...)>>
+{
+	// this double nesting is necessary because of bugs in visual studio's
+	// variadic templates. (dec 2012)
+	// removing it should be trivial because we always know that
+	// CallType == std::function<Result (const Class &, Args...)>
+	template<typename CallType>
+	struct caller
+	{
+		template<CallType * func>
+		Result call(Args... args) const
+		{
+			return (*func)(reinterpret_cast<const Class &>(*this), std::forward<Args>(args)...);
+		}
+	};
+};
 
 }
