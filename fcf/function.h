@@ -2,66 +2,83 @@
 
 #include "meta.h"
 #include "os.h"
-#include <cstdlib>
+#include "lambda.h"
 
 namespace fcf
 {
 template<typename T>
 struct FunctionBase
 {
-	FunctionBase(T func)
-		: func(func)
+	explicit FunctionBase(T func, void * ptr)
+		: func(func), ptr(ptr), global_lambda(nullptr)
 	{
-		memcpy(start_bytes, func, sizeof(start_bytes));
-		makeUnsafe(func, sizeof(start_bytes));
-	}
-	FunctionBase(const FunctionBase & other)
-		: func(other.func)
-	{
-		memcpy(start_bytes, other.start_bytes, sizeof(start_bytes));
-	}
-
-	FunctionBase & operator=(void * other)
-	{
-		func = other;
-		memcpy(start_bytes, other, sizeof(start_bytes));
-		makeUnsafe(other, sizeof(start_bytes));
-		return *this;
-	}
-	FunctionBase & operator=(const FunctionBase & other)
-	{
-		func = other.func;
-		memcpy(start_bytes, other.start_bytes, sizeof(start_bytes));
-		return *this;
+		copy_jump_bytes(start_bytes, ptr);
+		makeUnsafe(ptr, sizeof(start_bytes));
+		for (auto & stored : getUniqueStorers<T>())
+		{
+			if (stored.first != func) continue;
+			global_lambda = stored.second;
+			stored_lambda = *global_lambda;
+			break;
+		}
 	}
 
-	inline const unsigned char * get_start_bytes() const { return start_bytes; }
+	inline T get() const
+	{
+		return func;
+	}
+
+	template<T lhs>
+	void restoreState() const
+	{
+		// this assert is here because you can only assign a function to a fcf::Function that
+		// has information about itself. so only this is valid:
+		// fcf::Function old = foo;
+		// fcf::assign(foo) = bar;
+		// fcf::assign(foo) = old;
+		FCF_ASSERT(lhs == func);
+		copy_jump_bytes(ptr, start_bytes);
+		if (global_lambda) *global_lambda = stored_lambda;
+	}
 
 private:
 	unsigned char start_bytes[JMP_BYTE_COUNT];
-
+	void * ptr;
+	typename meta::func_type<T>::type stored_lambda;
+	typename meta::func_type<T>::type * global_lambda;
+	
 protected:
 	T func;
 	inline void prepare() const
 	{
-		memcpy(func, start_bytes, sizeof(start_bytes));
-		notifyCodeChange(func, sizeof(start_bytes));
+		copy_jump_bytes(ptr, start_bytes);
+		notifyCodeChange(ptr, sizeof(start_bytes));
 	}
 
 	struct Copier
 	{
 		Copier(const FunctionBase & parent)
-			: func(parent.func)
+			: parent(parent)
 		{
-			memcpy(copied_bytes, func, sizeof(copied_bytes));
+			copy_jump_bytes(copied_bytes, parent.ptr);
+			if (parent.global_lambda)
+			{
+				copied_lambda = std::move(*parent.global_lambda);
+				if (parent.stored_lambda) *parent.global_lambda = parent.stored_lambda;
+			}
 		}
 		~Copier()
 		{
-			memcpy(func, copied_bytes, sizeof(copied_bytes));
-			notifyCodeChange(func, sizeof(copied_bytes));
+			if (parent.global_lambda)
+			{
+				*parent.global_lambda = std::move(copied_lambda);
+			}
+			copy_jump_bytes(parent.ptr, copied_bytes);
+			notifyCodeChange(parent.ptr, sizeof(copied_bytes));
 		}
 	private:
-		void * func;
+		const FunctionBase & parent;
+		typename meta::func_type<T>::type copied_lambda;
 		unsigned char copied_bytes[JMP_BYTE_COUNT];
 
 		// intentionally left unimplemented
@@ -80,27 +97,13 @@ class Function<Result (*)(Args...)>
 	: public FunctionBase<Result (*)(Args...)>
 {
 public:
-	Function(Result (*func)(Args...))
-		: FunctionBase(func)
+	explicit Function(Result (*func)(Args...))
+		: FunctionBase(func, func)
 	{
 	}
 	Function(const Function & other)
 		: FunctionBase(other)
 	{
-	}
-	Function & operator=(Result (*other)(Args...))
-	{
-		FunctionBase::operator=(other);
-		return *this;
-	}
-	Function & operator=(const Function & other)
-	{
-		FunctionBase::operator=(other);
-		return *this;
-	}
-	inline Result (*get() const)(Args...)
-	{
-		return func;
 	}
 
 	Result operator()(Args... args) const
@@ -112,33 +115,16 @@ public:
 };
 template<typename Result, typename Class, typename... Args>
 class Function<Result (Class::*)(Args...)>
-	: public FunctionBase<void *>
+	: public FunctionBase<Result (Class::*)(Args...)>
 {
-	Result (Class::*func)(Args...);
 public:
-	Function(Result (Class::*func)(Args...))
-		: FunctionBase(getMemberFunctionAddress(func)), func(func)
+	explicit Function(Result (Class::*func)(Args...))
+		: FunctionBase(func, getMemberFunctionAddress(func))
 	{
 	}
 	Function(const Function & other)
 		: FunctionBase(other), func(other.func)
 	{
-	}
-	Function & operator=(Result (Class::*other)(Args...))
-	{
-		FunctionBase::operator=(getMemberFunctionAddress(other));
-		func = other;
-		return *this;
-	}
-	Function & operator=(const Function & other)
-	{
-		FunctionBase::operator=(other);
-		func = other.func;
-		return *this;
-	}
-	inline Result (Class::*get() const)(Args...)
-	{
-		return func;
 	}
 
 	Result operator()(Class & object, Args... args) const
@@ -150,33 +136,16 @@ public:
 };
 template<typename Result, typename Class, typename... Args>
 class Function<Result (Class::*)(Args...) const>
-	: public FunctionBase<void *>
+	: public FunctionBase<Result (Class::*)(Args...) const>
 {
-	Result (Class::*func)(Args...) const;
 public:
-	Function(Result (Class::*func)(Args...) const)
-		: FunctionBase(getMemberFunctionAddress(func)), func(func)
+	explicit Function(Result (Class::*func)(Args...) const)
+		: FunctionBase(func, getMemberFunctionAddress(func))
 	{
 	}
 	Function(const Function & other)
 		: FunctionBase(other), func(other.func)
 	{
-	}
-	Function & operator=(Result (Class::*other)(Args...) const)
-	{
-		FunctionBase::operator=(getMemberFunctionAddress(other));
-		func = other;
-		return *this;
-	}
-	Function & operator=(const Function & other)
-	{
-		FunctionBase::operator=(other);
-		func = other.func;
-		return *this;
-	}
-	inline Result (Class::*get() const)(Args...) const
-	{
-		return func;
 	}
 
 	Result operator()(const Class & object, Args... args) const
@@ -188,27 +157,12 @@ public:
 };
 template<typename Result, typename Class, typename... Args>
 class VirtualFunction<Result (Class::*)(Args...)>
-	: public FunctionBase<void *>
+	: public FunctionBase<Result (Class::*)(Args...)>
 {
-	Result (Class::*func)(Args...);
 public:
 	VirtualFunction(Class & object, Result (Class::*func)(Args...))
-		: FunctionBase(getVirtualFunctionAddress(&object, getVTableIndex<Result (Class::*)(Args...)>(func))), func(func)
+		: FunctionBase(func, getVirtualFunctionAddress(&object, getVTableIndex<Result (Class::*)(Args...)>(func)))
 	{
-	}
-	VirtualFunction(const VirtualFunction & other)
-		: FunctionBase(other), func(other.func)
-	{
-	}
-	VirtualFunction & operator=(const VirtualFunction & other)
-	{
-		FunctionBase::operator=(other);
-		func = other.func;
-		return *this;
-	}
-	inline Result (Class::*get() const)(Args...)
-	{
-		return func;
 	}
 
 	Result operator()(Class & object, Args... args) const
@@ -220,27 +174,12 @@ public:
 };
 template<typename Result, typename Class, typename... Args>
 class VirtualFunction<Result (Class::*)(Args...) const>
-	: public FunctionBase<void *>
+	: public FunctionBase<Result (Class::*)(Args...)>
 {
-	Result (Class::*func)(Args...) const;
 public:
 	VirtualFunction(Class & object, Result (Class::*func)(Args...) const)
-		: FunctionBase(getVirtualFunctionAddress(&object, getVTableIndex<Result (Class::*)(Args...) const>(func))), func(func)
+		: FunctionBase(func, getVirtualFunctionAddress(&object, getVTableIndex<Result (Class::*)(Args...) const>(func)))
 	{
-	}
-	VirtualFunction(const VirtualFunction & other)
-		: FunctionBase(other), func(other.func)
-	{
-	}
-	VirtualFunction & operator=(const VirtualFunction & other)
-	{
-		FunctionBase::operator=(other);
-		func = other.func;
-		return *this;
-	}
-	inline Result (Class::*get() const)(Args...) const
-	{
-		return func;
 	}
 
 	Result operator()(const Class & object, Args... args) const

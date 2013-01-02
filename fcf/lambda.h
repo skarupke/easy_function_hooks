@@ -2,18 +2,49 @@
 
 #include "meta.h"
 #include <functional>
+#include <vector>
 
 namespace fcf
 {
+template<typename K>
+std::vector<std::pair<K, typename meta::func_type<K>::type *>> & getUniqueStorers()
+{
+	static std::vector<std::pair<K, typename meta::func_type<K>::type *>> all_storers;
+	return all_storers;
+}
 
+// storage for an object of type T that is uniquely
+// identified by the ptr template argument. I use this
+// to store one std::function for every function pointer
 template<typename T, typename P, P ptr>
 struct unique_storer
 {
 	static T func;
+
+	// this struct is responsible for making func accessible at runtime
+	// by someone who has the pointer ptr
+	struct runtime_access
+	{
+		runtime_access()
+		{
+			getUniqueStorers<P>().emplace_back(ptr, &func);
+		}
+	};
+	static runtime_access record_pointer;
 };
 template<typename T, typename P, P ptr>
 T unique_storer<T, P, ptr>::func;
+template<typename T, typename P, P ptr>
+typename unique_storer<T, P, ptr>::runtime_access unique_storer<T, P, ptr>::record_pointer;
 
+template<typename P, P ptr>
+void clear_lambda()
+{
+	unique_storer<typename meta::func_type<P>::type, P, ptr>::func = nullptr;
+}
+
+// call_stored_function is used to generate a function pointer that I can use
+// to call the stored std::function in a unique_storer
 template<typename>
 struct call_stored_function;
 template<typename>

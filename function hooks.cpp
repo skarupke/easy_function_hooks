@@ -202,6 +202,32 @@ void test5()
 	FCF_ASSERT(foo.plusOne() == 6);
 }
 
+int test6_overridable()
+{
+	return 5;
+}
+
+void test6()
+{
+	FCF_ASSERT(test6_overridable() == 5);
+	auto first_state = fcf::function(&test6_overridable);
+	FCF_ASSIGN(&test6_overridable, [] { return 10; });
+	FCF_ASSERT(test6_overridable() == 10);
+	auto second_state = fcf::function(&test6_overridable);
+	FCF_ASSIGN(&test6_overridable, [] { return 15; });
+	FCF_ASSERT(test6_overridable() == 15);
+	auto third_state = fcf::function(&test6_overridable);
+	FCF_ASSIGN(&test6_overridable, second_state);
+	FCF_ASSERT(test6_overridable() == 10);
+	FCF_ASSIGN(&test6_overridable, first_state);
+	FCF_ASSERT(test6_overridable() == 5);
+	FCF_ASSERT(second_state() == 10);
+	FCF_ASSERT(third_state() == 15);
+	FCF_ASSIGN(&test6_overridable, third_state);
+	FCF_ASSERT(test6_overridable() == 15);
+	FCF_ASSERT(first_state() == 5);
+}
+
 void main()
 {
 	test1();
@@ -209,6 +235,7 @@ void main()
 	test3();
 	test4();
 	test5();
+	test6();
 
 	std::cout << "\nPress Return to quit." << std::endl;
 	std::cin.get();

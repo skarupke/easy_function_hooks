@@ -3,7 +3,6 @@
 #include "fcf/lambda.h"
 #include "fcf/function.h"
 #include "fcf/vtable.h"
-#include <cstdlib>
 #include <cstdint>
 
 namespace fcf
@@ -23,7 +22,9 @@ VirtualFunction<T> virtual_function(typename meta::class_type<T>::type & object,
 if (true)\
 {\
 	auto && rhs = __VA_ARGS__;\
-	::fcf::Assigner<typename ::fcf::meta::remove_ref_cv<decltype(x)>::type, x, typename ::fcf::meta::remove_ref_cv<decltype(rhs)>::type>::assign(rhs);\
+	typedef ::fcf::meta::remove_ref_cv<decltype(x)>::type function_type;\
+	::fcf::clear_lambda<function_type, x>();\
+	::fcf::Assigner<function_type, x, typename ::fcf::meta::remove_ref_cv<decltype(rhs)>::type>::assign(std::forward<decltype(rhs)>(rhs));\
 }\
 else static_cast<void>(0)
 
@@ -31,25 +32,26 @@ else static_cast<void>(0)
 if (true)\
 {\
 	auto && rhs = __VA_ARGS__;\
-	::fcf::VirtualAssigner<typename ::fcf::meta::remove_ref_cv<decltype(member_function)>::type, member_function, typename ::fcf::meta::remove_ref_cv<decltype(rhs)>::type>::assign(object, rhs);\
+	typedef ::fcf::meta::remove_ref_cv<decltype(member_function)>::type function_type;\
+	::fcf::clear_lambda<function_type, member_function>();\
+	::fcf::VirtualAssigner<function_type, member_function, typename ::fcf::meta::remove_ref_cv<decltype(rhs)>::type>::assign(object, std::forward<decltype(rhs)>(rhs));\
 }\
 else static_cast<void>(0)
 
 
 inline void place_jmp(void * from, const void * to)
 {
-#ifdef _DEBUG
-	// must be within two gigabytes of each other
-	ptrdiff_t distance = static_cast<const char *>(from) - static_cast<const char *>(to);
-	FCF_ASSERT(static_cast<int32_t>(distance) == distance);
-#endif
-	unsigned char * target_bytes = static_cast<unsigned char *>(from);
 	static const unsigned char JMP_INSTRUCTION = 0xE9;
-	uint32_t jump_dist = reinterpret_cast<uint32_t>(to) - reinterpret_cast<uint32_t>(from) - JMP_BYTE_COUNT;
-	makeUnsafe(from, JMP_BYTE_COUNT);
+	ptrdiff_t jump_dist = reinterpret_cast<size_t>(to) - reinterpret_cast<size_t>(from) - JMP_BYTE_COUNT;
+	int32_t jump_dist_four_bytes = static_cast<int32_t>(jump_dist);
+	// must be within two gigabytes of each other, because we only have
+	// four bytes for the jump distance, even in 64 bit
+	FCF_ASSERT(jump_dist_four_bytes == jump_dist);
+	unsigned char * target_bytes = static_cast<unsigned char *>(from);
+	makeUnsafe(target_bytes, JMP_BYTE_COUNT);
 	target_bytes[0] = JMP_INSTRUCTION;
-	memcpy(target_bytes + 1, &jump_dist, sizeof(jump_dist));
-	notifyCodeChange(from, JMP_BYTE_COUNT);
+	for (int i = 0; i < sizeof(jump_dist_four_bytes); ++i) target_bytes[i + 1] = reinterpret_cast<unsigned char *>(&jump_dist_four_bytes)[i];
+	notifyCodeChange(target_bytes, JMP_BYTE_COUNT);
 }
 
 template<typename T, T lhs>
@@ -65,7 +67,7 @@ struct VirtualBaseAssigner
 template<typename T, T lhs>
 struct FunctionPointerAssigner
 {
-	static void assign(const T rhs)
+	static void assign(T rhs)
 	{
 		if (lhs == rhs) return;
 		place_jmp(lhs, rhs);
@@ -74,7 +76,7 @@ struct FunctionPointerAssigner
 template<typename T, T lhs>
 struct MemberFunctionAssigner
 {
-	static void assign(const T rhs)
+	static void assign(T rhs)
 	{
 		if (lhs == rhs) return;
 		place_jmp(getMemberFunctionAddress(lhs), getMemberFunctionAddress(rhs));
@@ -84,7 +86,7 @@ template<typename T, T lhs>
 struct VirtualFunctionAssigner
 	: public VirtualBaseAssigner<T, lhs>
 {
-	static void assign(class_type & object, const T rhs)
+	static void assign(class_type & object, T rhs)
 	{
 		if (lhs == rhs) return;
 		place_jmp(getFunctionAddress(object), getMemberFunctionAddress(rhs));
@@ -96,42 +98,16 @@ struct FcfFunctionAssigner
 {
 	static void assign(const Function<T> & rhs)
 	{
-		// this assert is here because you can only assign a function to a fcf::Function that
-		// has information about itself. so only this is valid:
-		// fcf::Function old = foo;
-		// fcf::assign(foo) = bar;
-		// fcf::assign(foo) = old;
-		FCF_ASSERT(lhs == rhs.get());
-		memcpy(lhs, rhs.get_start_bytes(), JMP_BYTE_COUNT);
-	}
-};
-template<typename T, T lhs>
-struct MemberFcfFunctionAssigner
-{
-	static void assign(const Function<T> & rhs)
-	{
-		// this assert is here because you can only assign a function to a fcf::Function that
-		// has information about itself. so only this is valid:
-		// fcf::Function old = foo; // store original value
-		// fcf::assign(foo) = bar;
-		// fcf::assign(foo) = old; // assign back to original value
-		FCF_ASSERT(lhs == rhs.get());
-		memcpy(getMemberFunctionAddress(lhs), rhs.get_start_bytes(), JMP_BYTE_COUNT);
+		rhs.restoreState<lhs>();
 	}
 };
 template<typename T, T lhs>
 struct VirtualFcfFunctionAssigner
 	: public VirtualBaseAssigner<T, lhs>
 {
-	static void assign(class_type & object, const Function<T> & rhs)
+	static void assign(class_type &, const Function<T> & rhs)
 	{
-		// this assert is here because you can only assign a function to a fcf::Function that
-		// has information about itself. so only this is valid:
-		// fcf::Function old = foo; // store original value
-		// fcf::assign(foo) = bar;
-		// fcf::assign(foo) = old; // assign back to original value
-		FCF_ASSERT(lhs == rhs.get());
-		memcpy(getFunctionAddress(object), rhs.get_start_bytes(), JMP_BYTE_COUNT);
+		rhs.restoreState<lhs>();
 	}
 };
 
@@ -141,9 +117,13 @@ struct FunctorAssigner
 	static void assign(F rhs)
 	{
 		typedef typename meta::func_type<T>::type func_type;
-		unique_storer<func_type, T, lhs>::func = std::move(rhs);
+		// this next line is to force the compiler to instantiate the record_pointer
+		// member from the unique storer so that it takes care of making the stored
+		// function accessible at runtime
+		static_cast<void>(unique_storer<func_type, T, lhs>::record_pointer);
 		auto caller = &call_stored_function<func_type>::caller<func_type>::call<&unique_storer<func_type, T, lhs>::func>;
 		FCF_ASSIGN(lhs, caller);
+		unique_storer<func_type, T, lhs>::func = std::move(rhs);
 	}
 };
 
@@ -153,9 +133,13 @@ struct MemberFunctorAssigner
 	static void assign(F rhs)
 	{
 		typedef typename meta::func_type<T>::type func_type;
-		unique_storer<func_type, T, lhs>::func = std::move(rhs);
+		// this next line is to force the compiler to instantiate the record_pointer
+		// member from the unique storer so that it takes care of making the stored
+		// function accessible at runtime
+		static_cast<void>(unique_storer<func_type, T, lhs>::record_pointer);
 		auto caller = &member_call_stored_function<func_type>::caller<func_type>::call<&unique_storer<func_type, T, lhs>::func>;
 		FCF_ASSIGN(lhs, caller);
+		unique_storer<func_type, T, lhs>::func = std::move(rhs);
 	}
 };
 template<typename T, T lhs, typename F>
@@ -165,16 +149,20 @@ struct VirtualFunctorAssigner
 	static void assign(class_type & object, F rhs)
 	{
 		typedef typename meta::func_type<T>::type func_type;
-		unique_storer<func_type, T, lhs>::func = std::move(rhs);
+		// this next line is to force the compiler to instantiate the record_pointer
+		// member from the unique storer so that it takes care of making the stored
+		// function accessible at runtime
+		static_cast<void>(unique_storer<func_type, T, lhs>::record_pointer);
 		auto caller = &member_call_stored_function<func_type>::caller<func_type>::call<&unique_storer<func_type, T, lhs>::func>;
 		FCF_VIRTUAL_ASSIGN(object, lhs, caller);
+		unique_storer<func_type, T, lhs>::func = std::move(rhs);
 	}
 };
 
 template<typename T, T lhs, typename F>
 struct CompatibleMemberFunctionAssigner
 {
-	static void assign(const F rhs)
+	static void assign(F rhs)
 	{
 		place_jmp(getMemberFunctionAddress(lhs), getMemberFunctionAddress(rhs));
 	}
@@ -184,7 +172,7 @@ template<typename T, T lhs, typename F>
 struct CompatibleVirtualFunctionAssigner
 	: public VirtualBaseAssigner<T, lhs>
 {
-	static void assign(class_type & object, const F rhs)
+	static void assign(class_type & object, F rhs)
 	{
 		place_jmp(getFunctionAddress(object), getMemberFunctionAddress(rhs));
 	}
@@ -194,31 +182,26 @@ template<typename T, T lhs, typename AssignTo>
 struct Assigner
 	: std::conditional
 	<
-		meta::is_method<T>::value,
+		std::is_same<Function<T>, AssignTo>::value,
+		FcfFunctionAssigner<T, lhs>,
 		typename std::conditional
 		<
-			std::is_same<T, AssignTo>::value,
-			MemberFunctionAssigner<T, lhs>,
+			meta::is_method<T>::value,
 			typename std::conditional
 			<
-				std::is_same<Function<T>, AssignTo>::value,
-				MemberFcfFunctionAssigner<T, lhs>,
+				std::is_same<T, AssignTo>::value,
+				MemberFunctionAssigner<T, lhs>,
 				typename std::conditional
 				<
 					meta::is_method_compatible<T, AssignTo>::value,
 					CompatibleMemberFunctionAssigner<T, lhs, AssignTo>,
 					MemberFunctorAssigner<T, lhs, AssignTo>
 				>::type
-			>::type
-		>::type,
-		typename std::conditional
-		<
-			std::is_same<T, AssignTo>::value,
-			FunctionPointerAssigner<T, lhs>,
+			>::type,
 			typename std::conditional
 			<
-				std::is_same<Function<T>, AssignTo>::value,
-				FcfFunctionAssigner<T, lhs>,
+				std::is_same<T, AssignTo>::value,
+				FunctionPointerAssigner<T, lhs>,
 				FunctorAssigner<T, lhs, AssignTo>
 			>::type
 		>::type

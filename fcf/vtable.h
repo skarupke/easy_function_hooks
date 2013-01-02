@@ -4,6 +4,7 @@
 namespace fcf
 {
 
+// this generates 256 virtual functions
 #define FCF_GET(x) virtual size_t Get ## x() const { return x - 1 - base_counter; }
 #define FCF_GET_CAT(x) FCF_GET(x)
 #define FCF_GET2 FCF_GET_CAT(__COUNTER__) FCF_GET_CAT(__COUNTER__)
@@ -15,13 +16,12 @@ namespace fcf
 #define FCF_GET128 FCF_GET64 FCF_GET64
 #define FCF_GET256 FCF_GET128 FCF_GET128
 
-template<typename T>
 struct VTableCounter
 {
 	typedef size_t (VTableCounter::*func_type)() const;
 	enum { base_counter = __COUNTER__ };
 	FCF_GET256
-	size_t call(func_type func)
+	size_t get_index(func_type func) const
 	{
 		return (this->*func)();
 	}
@@ -30,8 +30,12 @@ struct VTableCounter
 template <typename F>
 size_t getVTableIndex(F f)
 {
-	VTableCounter<F> vt;
-	return vt.call(reinterpret_cast<typename VTableCounter<F>::func_type>(f));
+	// here is how it works: the many functions generated above each correspond
+	// to one index in the vtable. when I use reinterpret_cast on the given
+	// function it will call one of the functions generated above. and that
+	// function tells me it's index
+	VTableCounter vt;
+	return vt.get_index(reinterpret_cast<VTableCounter::func_type>(f));
 }
 
 void * getVirtualFunctionAddress(void * classInstance, size_t index);
